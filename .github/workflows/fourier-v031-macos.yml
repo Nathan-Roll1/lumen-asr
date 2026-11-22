@@ -1,0 +1,44 @@
+name: Test Fourier with the official Lumen v0.3.1 Apple Silicon worker
+on:
+  push:
+    branches: [qa/fourier-tagged-mlx]
+    paths: ['.github/workflows/fourier-v031-macos.yml', 'fourier-v031-qa/**']
+permissions:
+  contents: read
+jobs:
+  apple:
+    runs-on: macos-15
+    timeout-minutes: 26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: fourier-v031-qa
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the tagged app's Python runtime and the original picker check
+        working-directory: fourier-v031-qa
+        run: |
+          test "$(uname -m)" = "arm64"
+          python -m pip -q install 'mlx-qwen3-asr==0.3.5' 'soundfile>=0.13' 'huggingface_hub>=0.35'
+          cargo build -q
+      - name: Read the distributed worker and original public Fourier pack
+        working-directory: fourier-v031-qa
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.3.1 -R fakechris/lumen-asr -p 'Lumen-ASR-v0.3.1-arm64.dmg' -p 'SHA256SUMS.txt'
+          grep 'Lumen-ASR-v0.3.1-arm64.dmg' SHA256SUMS.txt | shasum -a 256 -c -
+          mkdir -p mounted
+          hdiutil attach -readonly -nobrowse -mountpoint "$PWD/mounted" Lumen-ASR-v0.3.1-arm64.dmg
+          curl -fsSL https://raw.githubusercontent.com/fakechris/lumen-suite/541541a006b9c41425f2379d2acd468b1269ef4e/crates/lumen-asr-engine/src/qwen_worker.py -o expected-worker.py
+          curl -fsSL https://raw.githubusercontent.com/ggml-org/whisper.cpp/5eaee0cc9024eb9e9a99469199920c8b7f5cb9ec/samples/jfk.wav -o jfk.wav
+          python -u verify.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tag-published-worker-evidence
+          path: |
+            fourier-v031-qa/receipt.json
+            fourier-v031-qa/worker-stdout.jsonl
+            fourier-v031-qa/worker-stderr.log

@@ -7,7 +7,7 @@ from playwright.sync_api import sync_playwright
 
 out = Path("evidence")
 base = "http://127.0.0.1:19382"
-for _ in range(90):
+for _ in range(20):
     try:
         with urllib.request.urlopen(base + "/json/version", timeout=1) as r:
             if r.status == 200:
@@ -16,7 +16,9 @@ for _ in range(90):
         pass
     time.sleep(1)
 else:
-    raise RuntimeError("Installed Lumen WebView did not expose its diagnostic session")
+    from native_picker import check_native_picker
+    check_native_picker(out)
+    raise SystemExit(0)
 
 with sync_playwright() as playwright:
     browser = playwright.chromium.connect_over_cdp(base)

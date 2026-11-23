@@ -1,0 +1,75 @@
+name: Build and exercise the proposed Fourier Windows installer
+on:
+  push:
+    branches: [qa/fourier-windows-installer-20261123]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 48
+    env:
+      CARGO_INCREMENTAL: "0"
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      DESKTOP_REV: 850949c0986261b3c7c0b4f957af57c0e5d90f8f
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          path: validation
+          persist-credentials: false
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: 850949c0986261b3c7c0b4f957af57c0e5d90f8f
+          path: app
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: "22"
+      - name: Build the unmodified candidate
+        working-directory: app/apps/desktop
+        run: |
+          npm ci
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run tauri -- build --bundles nsis
+      - name: Collect installer and corresponding source
+        run: |
+          New-Item -ItemType Directory package, evidence | Out-Null
+          $setup = @(Get-ChildItem app/target/release/bundle/nsis/*-setup.exe)
+          if ($setup.Count -ne 1) { throw "Expected one NSIS installer" }
+          Copy-Item $setup[0] package/Lumen-ASR-Fourier-PR206-x64-setup.exe
+          Copy-Item app/LICENSE package/LICENSE
+          Copy-Item validation/fourier-review/README.md package/
+          git -C app archive -o ../package/corresponding-desktop-source.zip $env:DESKTOP_REV
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $hash = (Get-FileHash package/*-setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Lumen-ASR-Fourier-PR206-x64-setup.exe" | Set-Content -Encoding utf8NoBOM package/SHA256SUMS
+      - name: Install and exercise the production model picker on a clean Windows user
+        run: |
+          python -m pip -q install playwright==1.55.0
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $install = Join-Path $env:RUNNER_TEMP 'FourierReview'
+          $setup = Start-Process (Resolve-Path package/*-setup.exe) -ArgumentList @('/S',"/D=$install") -Wait -PassThru
+          if ($setup.ExitCode) { throw "Installer exited $($setup.ExitCode)" }
+          $exe = @(Get-ChildItem $install -File -Filter '*.exe' | Where-Object { $_.Name -notmatch 'uninstall' })
+          if ($exe.Count -ne 1) { throw "Expected one installed program: $exe" }
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=19382 --remote-debugging-address=127.0.0.1'
+          $env:LUMEN_MODELS_DIR = Join-Path $env:RUNNER_TEMP 'FourierModels'
+          $app = Start-Process $exe[0].FullName -PassThru
+          python validation/fourier-review/verify_picker.py
+          $result = $LASTEXITCODE
+          Stop-Process -Id $app.Id -ErrorAction SilentlyContinue
+          exit $result
+      - name: Save diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: installed-picker-verification
+          path: evidence/
+          if-no-files-found: ignore
+      - name: Save reviewer installer and matching source
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: Lumen-ASR-Fourier-PR206-Windows-x64
+          path: package/
+          retention-days: 90
+          compression-level: 0
